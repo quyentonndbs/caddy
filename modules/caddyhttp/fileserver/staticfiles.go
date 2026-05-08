@@ -125,6 +125,11 @@ type FileServer struct {
 	// When possible, all paths are resolved to their absolute form before
 	// comparisons are made. For maximum clarity and explictness, use complete,
 	// absolute paths; or, for greater portability, use relative paths instead.
+	//
+	// Note that hide comparisons are case-sensitive. On case-insensitive
+	// filesystems, requests with different path casing may still resolve to the
+	// same file or directory on disk, so hide should not be treated as a
+	// security boundary for sensitive paths.
 	Hide []string `json:"hide,omitempty"`
 
 	// The names of files to try as index files if a folder is requested.
@@ -780,7 +785,7 @@ func redirect(w http.ResponseWriter, r *http.Request, toPath string) error {
 	if r.URL.RawQuery != "" {
 		toPath += "?" + r.URL.RawQuery
 	}
-	http.Redirect(w, r, toPath, http.StatusPermanentRedirect)
+	http.Redirect(w, r, toPath, http.StatusPermanentRedirect) //nolint:gosec // toPath is a same-origin path and leading // is stripped above
 	return nil
 }
 
