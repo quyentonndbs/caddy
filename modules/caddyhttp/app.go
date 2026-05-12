@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -208,6 +207,9 @@ func (app *App) Provision(ctx caddy.Context) error {
 		app.Metrics.httpMetrics = &httpMetrics{}
 		// Scan config for allowed hosts to prevent cardinality explosion
 		app.Metrics.scanConfigForHosts(app)
+		if err := app.Metrics.provisionOTLP(ctx); err != nil {
+			return err
+		}
 	}
 	// prepare each server
 	oldContext := ctx.Context
@@ -238,12 +240,7 @@ func (app *App) Provision(ctx caddy.Context) error {
 
 		// if no protocols configured explicitly, enable all except h2c
 		if len(srv.Protocols) == 0 {
-			srv.Protocols = []string{"h1", "h2", "h3"}
-		}
-
-		srvProtocolsUnique := map[string]struct{}{}
-		for _, srvProtocol := range srv.Protocols {
-			srvProtocolsUnique[srvProtocol] = struct{}{}
+			srv.Protocols = srv.protocolsWithDefaults()
 		}
 
 		if srv.ListenProtocols != nil {
@@ -254,31 +251,7 @@ func (app *App) Provision(ctx caddy.Context) error {
 
 			for i, lnProtocols := range srv.ListenProtocols {
 				if lnProtocols != nil {
-					// populate empty listen protocols with server protocols
-					lnProtocolsDefault := false
-					var lnProtocolsInclude []string
-					srvProtocolsInclude := maps.Clone(srvProtocolsUnique)
-
-					// keep existing listener protocols unless they are empty
-					for _, lnProtocol := range lnProtocols {
-						if lnProtocol == "" {
-							lnProtocolsDefault = true
-						} else {
-							lnProtocolsInclude = append(lnProtocolsInclude, lnProtocol)
-							delete(srvProtocolsInclude, lnProtocol)
-						}
-					}
-
-					// append server protocols to listener protocols if any listener protocols were empty
-					if lnProtocolsDefault {
-						for _, srvProtocol := range srv.Protocols {
-							if _, ok := srvProtocolsInclude[srvProtocol]; ok {
-								lnProtocolsInclude = append(lnProtocolsInclude, srvProtocol)
-							}
-						}
-					}
-
-					srv.ListenProtocols[i] = lnProtocolsInclude
+					srv.ListenProtocols[i] = srv.listenerProtocolsWithDefaults(lnProtocols)
 				}
 			}
 		}
@@ -815,6 +788,12 @@ func (app *App) Stop() error {
 				app.logger.Error("server stop hook", zap.String("server", name), zap.Error(err))
 			}
 		}
+	}
+
+	// flush and shut down the OTLP metrics exporter (if configured) so any
+	// last data point reaches the collector before the process exits
+	if err := app.Metrics.shutdown(ctx); err != nil {
+		app.logger.Error("shutting down OTLP metrics", zap.Error(err))
 	}
 
 	app.stopped = true
